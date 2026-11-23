@@ -14,10 +14,10 @@ if errorlevel 1 (
     exit /b 1
 )
 
-%PY% -c "import numpy" >nul 2>nul
+%PY% -c "import numpy, PIL.ImageTk" >nul 2>nul
 if errorlevel 1 (
-    echo Installiere numpy ...
-    %PY% -m pip install numpy
+    echo Installiere numpy und pillow ...
+    %PY% -m pip install numpy pillow
 )
 
 %PY% main.py
