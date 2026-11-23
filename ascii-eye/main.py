@@ -4,8 +4,9 @@ Ein tkinter-Fenster, in dem jede Zelle ein farbiges ASCII-Zeichen ist.
 Das Bild wird pro Frame prozedural mit numpy berechnet; auf dem Canvas
 werden nur die Zeilen neu aufgebaut, in denen sich etwas geaendert hat.
 
-Start:   pip install numpy
-         python main.py
+Start:   Windows: Doppelklick auf start.bat (installiert numpy und startet)
+         sonst:   python -m pip install numpy
+                  python main.py
 
 Tasten:  Leertaste / R = neu starten      Esc = beenden
 """
@@ -15,7 +16,16 @@ import time
 import tkinter as tk
 from tkinter import font as tkfont
 
-import numpy as np
+try:
+    import numpy as np
+except ImportError:                                  # verstaendliche Meldung statt Sofort-Absturz
+    from tkinter import messagebox
+    _root = tk.Tk()
+    _root.withdraw()
+    messagebox.showerror("numpy fehlt", "Das Paket numpy ist nicht installiert.\n\n"
+                         "Starte die Datei start.bat oder fuehre im Terminal aus:\n\n"
+                         "    python -m pip install numpy")
+    raise SystemExit(1)
 
 # ----------------------------------------------------------------- Einstellungen
 COLS, ROWS = 110, 44      # Raster in Zeichen
