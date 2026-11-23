@@ -35,6 +35,11 @@ LN_ZOOM = 2.8             # ln des Zoomfaktors bei T_ZOOM1 (~16x)
 
 # ----------------------------------------------------------------- Szene
 EYE_A = 1.22              # halbe Augenbreite (Bildhoehe = 2 Einheiten)
+LID_UP, LID_LO = 0.36, 0.23   # Oeffnung nach oben / unten (klein = schmales "Hunter Eye")
+LID_MID = 0.06            # Lidspalte liegt etwas unter der Pupillenmitte
+TILT = 0.11               # Neigung: aeusserer Augenwinkel hoeher als der innere
+LASH_UP, LASH_LO = 0.36, 0.14 # Wimpernlaenge oben / unten
+BROW_Y, BROW_H, BROW_TILT = -0.76, 0.125, 0.07   # Augenbraue: Hoehe, halbe Dicke, Neigung
 R_IRIS = 0.33
 R_PUPIL = 0.11
 R_PLANET = 0.0176
@@ -43,6 +48,7 @@ N_STARS = 380
 SKIN = np.array([236.0, 130.0, 94.0])
 SCLERA = np.array([250.0, 246.0, 240.0])
 CORNER = np.array([232.0, 150.0, 140.0])
+BROW = np.array([66.0, 34.0, 18.0])
 IRIS_U = [0.00, 0.06, 0.22, 0.55, 0.86, 1.00]
 IRIS_RGB = np.array([[40, 18, 6], [255, 214, 60], [250, 170, 30],
                      [226, 110, 18], [120, 52, 14], [38, 16, 8]], float)
@@ -114,6 +120,19 @@ class Scene:
         bot = n[y1, x0] * (1 - fx) + n[y1, x1] * fx
         return top * (1 - fy) + bot * fy
 
+    def lashes(self, lx, d, spacing, width, lean0, lean1, length):
+        """Wimpern als geschwungene Straehnen; d = Abstand zur Lidkante (>0 = ausserhalb)."""
+        bend = d + 2.2 * d * d                       # weiter draussen staerker geneigt
+        root = lx - (lean0 + lean1 * lx / EYE_A) * bend      # wo die Wimper am Lid sitzt
+        n = root / spacing
+        i = np.floor(n)
+        k = root / EYE_A
+        rnd = self.noise[i.astype(np.int64) & 63, 11]        # jede Wimper etwas anders
+        full = length(k) * (0.75 + 0.5 * rnd) * np.clip(1.0 - k * k, 0.0, 1.0) ** 0.2
+        rel = np.clip(d / np.maximum(full, 1e-6), 0.0, 1.0)  # 0 = Wurzel, 1 = Spitze
+        thick = 0.5 * width * (1.0 - rel ** 2) ** 0.8        # laeuft erst am Ende spitz zu
+        return smooth((thick - np.abs(n - i - 0.5)) / 0.03 + 0.5) * (d > 0) * (rel < 1.0)
+
     @staticmethod
     def quant(rgb):
         """RGB (0..255) -> 12-Bit-Farbindex (4 Bit pro Kanal)."""
@@ -131,22 +150,36 @@ class Scene:
         lx = x + 0.035 * math.sin(0.9 * t) * calm
         ly = y + 0.012 * math.sin(1.4 * t + 1.0) * calm
         opened = float(smooth((t - T_OPEN0) / (T_OPEN1 - T_OPEN0)))
-        f = np.clip(1.0 - (lx / EYE_A) ** 2, 0.0, 1.0)
-        mid = 0.03 - 0.05 * lx
-        up = mid - 0.50 * f ** 0.7 * opened
-        lo = mid + 0.36 * f ** 0.85 * opened
+        kx = lx / EYE_A                              # -1 innerer .. +1 aeusserer Augenwinkel
+        f = np.clip(1.0 - kx ** 2, 0.0, 1.0)
+        mid = LID_MID - TILT * lx                    # aeusserer Winkel sitzt hoeher
+        up = mid - LID_UP * (1.0 - 0.15 * kx) * f ** 0.6 * opened
+        lo = mid + LID_LO * f ** 0.9 * opened
         eye = (ly > up) & (ly < lo) & (f > 0)
         du, dl = up - ly, ly - lo                    # Abstand ueber / unter dem Lid
 
         # --- Haut
         shade = 0.80 + 0.20 * self.vnoise(lx * 3 + 7, ly * 3 + 3)
         shade += 0.10 * (self.vnoise(lx * 14, ly * 14) - 0.5)
-        shade *= 1.0 - 0.28 * smooth((-ly - 0.55) / 0.45)            # Schatten unter der Braue
         edge = smooth(f / 0.12)
-        shade *= 1.0 - 0.90 * edge * np.exp(-np.maximum(du, 0) / 0.035) * (du > 0)   # Wimpern
-        shade *= 1.0 - 0.50 * edge * np.exp(-np.maximum(dl, 0) / 0.045) * (dl >= 0)
-        shade *= 1.0 - 0.45 * f * np.exp(-((du - 0.17 * f - 0.03) / 0.035) ** 2)   # Lidfalte
+        above = du > 0
+        shade *= 1.0 - 0.16 * f * np.exp(-np.maximum(du, 0) / 0.30) * above          # tiefliegendes Auge
+        shade *= 1.0 - 0.95 * edge * np.exp(-np.maximum(du, 0) / 0.022) * above      # Wimpernkranz
+        shade *= 1.0 - 0.60 * edge * np.exp(-np.maximum(dl, 0) / 0.020) * (dl >= 0)
+        shade *= 1.0 - 0.22 * f * np.exp(-((du - 0.08 * f - 0.03) / 0.03) ** 2)      # Schlupflid-Falte
+        grow = 0.3 + 0.7 * opened
+        shade *= 1.0 - 0.97 * self.lashes(lx, du, 0.150, 0.50, 0.12, 0.68,
+                                          lambda k: (LASH_UP + 0.5 * LASH_UP * k) * grow)
+        shade *= 1.0 - 0.85 * self.lashes(lx, dl, 0.170, 0.36, 0.10, 0.60,
+                                          lambda k: LASH_LO * smooth((k + 0.75) / 0.5) * grow)
         col = SKIN * shade[..., None]
+
+        # --- Augenbraue: tief, gerade, zum aeusseren Ende hin duenner
+        hair = self.vnoise((lx - 0.9 * ly) * 42, (0.9 * lx + ly) * 7)
+        half = BROW_H * smooth((lx + 1.30) / 0.25) * (1.0 - 0.6 * smooth((lx - 0.2) / 1.0))
+        brow = smooth((half * (0.65 + 0.6 * hair) - np.abs(ly - (BROW_Y - BROW_TILT * lx))) / 0.03)
+        brow = (brow * (0.80 + 0.20 * hair))[..., None]
+        col = col * (1.0 - brow) + BROW * (0.5 + 1.0 * hair)[..., None] * brow
 
         # --- Augenweiss
         lid_shadow = 1.0 - 0.45 * np.exp(-np.maximum(ly - up, 0) / 0.05)
